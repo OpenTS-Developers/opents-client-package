@@ -1,0 +1,36 @@
+# Downloads are verified against SHA-256 before use.
+# `url` takes precedence over an optional local `path`.
+
+[movies]
+# Reproduce this archive with `build.py media` from assets/MOVIES.
+url = "https://downloads.cncnet.org/Games/OpenTS/opents-movies-ab488b8c.zip"
+sha256 = "ab488b8c092fad6de981c54f29ab9d4cad364e82cb76b81e52c92141c0883916"
+size = 1358053654
+unpacks-to = "assets/MOVIES"
+
+[engine]
+# Includes symbols used by the engine crash handler.
+url = "https://github.com/OpenTS-Developers/OpenTS/releases/download/v0.1.0/OpenTS-v0.1.0.zip"
+sha256 = "27869609c63db5b243da375b5ce26b9432e78d4fbb7bf84bf7a53a8a7f2436f4"
+size = 15209271
+unpacks-to = ".cache/parts/engine"
+
+[client]
+# develop 6f4c2fd; push artifact expires 2026-12-06.
+url = "https://nightly.link/CnCNet/xna-cncnet-client/actions/artifacts/10025887168.zip"
+sha256 = "cc861fbe927a8e3e4d95a5cc880bedd8d56b4eba775160219955f047a0eb8345"
+size = 60517804
+unpacks-to = ".cache/parts/client"
+
+[launcher]
+url = "https://github.com/CnCNet/xna-cncnet-client-launcher/releases/download/v2.0.13/CnCNet.LauncherStub-v2.0.13-net40.zip"
+sha256 = "a1134ad4281e9d6fe65a3e5ae2c404c16efe1f18ffc8ea139b96a48abc713570"
+size = 130954
+unpacks-to = ".cache/parts/launcher"
+
+[editor]
+# tsclient 678a838; push artifact expires 2026-12-07.
+url = "https://nightly.link/CnCNet/WorldAlteringEditor/actions/artifacts/10053174055.zip"
+sha256 = "9e8f410cfae14690add507014e01254d806c16788bb56b560e995889ff73296b"
+size = 16761225
+unpacks-to = ".cache/parts/editor"

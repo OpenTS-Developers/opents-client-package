@@ -1,0 +1,18 @@
+# Build output and caches.
+/build/
+/dist/
+/dist-mirror/
+/dist-media/
+/.cache/
+/.build-cache/
+
+# Downloaded campaign movies.
+/assets/MOVIES/
+
+# Local content, excluded from packages.
+/local/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
