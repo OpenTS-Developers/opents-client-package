@@ -1,0 +1,138 @@
+name: dev
+
+on:
+  schedule:
+    # After the engine nightly at 03:00 UTC.
+    - cron: '30 4 * * *'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'The commit, branch or tag of this repository to build'
+        default: main
+      engine:
+        description: 'The build of the game: nightly, a branch, a commit, run:<id> or artifact:<id>'
+        default: nightly
+
+permissions:
+  contents: read
+
+# Serialize scheduled and manual Dev deployments.
+concurrency:
+  group: dev-channel
+  cancel-in-progress: false
+
+env:
+  MIRROR: https://downloads.cncnet.org/updates/games/opents
+
+jobs:
+  # Skip unchanged scheduled builds before packaging.
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.name.outputs.tag }}
+      build: ${{ steps.name.outputs.build }}
+      artifact: ${{ steps.engine.outputs.artifact }}
+      commit: ${{ steps.engine.outputs.commit }}
+      package: ${{ steps.name.outputs.package }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: tools/.python-version
+
+      - name: Find the build of the game
+        id: engine
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SELECTOR: ${{ inputs.engine || 'nightly' }}
+        run: python tools/build.py engine "$SELECTOR" | tee -a "$GITHUB_OUTPUT"
+
+      # Compare both commits; the date is only for display.
+      - name: Name the version
+        id: name
+        env:
+          ENGINE: ${{ steps.engine.outputs.commit }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          echo "package=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          ours="$(git rev-parse --short=7 HEAD)"
+          tag="dev-$(date -u +%F)-${ours}-${ENGINE:0:7}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          carried="$(curl -fsS "$MIRROR/dev/version?$GITHUB_RUN_ID" | grep -m1 '^Version=' | cut -d= -f2- | tr -d '\r')" || carried=""
+          echo "Dev carries '${carried:-nothing}'; this would be '$tag'."
+          if [ "$EVENT" = schedule ] && [ "${carried#*-????-??-??-}" = "${ours}-${ENGINE:0:7}" ]; then
+            echo "Nothing moved since; leaving it as it is."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The deployment key can write only the Dev folder.
+  deploy:
+    needs: decide
+    if: needs.decide.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    environment: cncnet-dev
+    env:
+      TAG: ${{ needs.decide.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.decide.outputs.package }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: tools/.python-version
+
+      - name: Make sure a .7z can be unpacked
+        run: which 7z || sudo apt-get install -y --no-install-recommends p7zip-full
+
+      # Share pinned movie downloads with release builds.
+      - name: Reuse the last downloads
+        uses: actions/cache@v6
+        with:
+          path: .cache/fetch
+          key: parts-release-${{ hashFiles('pins.toml') }}
+
+      - name: Build the version and verify its update mirror
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ needs.decide.outputs.artifact }}
+        run: |
+          python tools/build.py package --variant nomovies --tag "$TAG" \
+            --engine "artifact:$ARTIFACT" --mirror --previous "$MIRROR/dev/"
+
+      - name: Load the deploy key
+        env:
+          CNCNET_SSH_KEY: ${{ secrets.CNCNET_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$CNCNET_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          cp .github/cncnet_known_hosts ~/.ssh/known_hosts
+
+      # The key confines --delete to Dev; -c avoids uploading unchanged bytes.
+      - name: Put it on the channel in place of last night's
+        run: |
+          rsync -azc --delete --partial --info=stats1 \
+            -e "ssh -i ~/.ssh/deploy -o ServerAliveInterval=15 -o UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            "dist/mirror/$TAG/" cncnet@159.223.1.73:.
+
+      - name: Read it back through the CDN
+        run: python tools/build.py readback --built "dist/mirror/$TAG" --url "$MIRROR/dev/"
+
+      - name: Say what Dev is now
+        env:
+          COMMIT: ${{ needs.decide.outputs.commit }}
+          ARTIFACT: ${{ needs.decide.outputs.artifact }}
+        run: |
+          {
+            echo "## Dev is $TAG"
+            echo
+            echo "- this repository: \`$(git rev-parse HEAD)\`"
+            echo "- the game: \`$COMMIT\`, artifact $ARTIFACT"
+            echo "- Game.exe sha256: \`$(sha256sum dist/OpenTS-Client/Game.exe | cut -d' ' -f1)\`"
+          } >> "$GITHUB_STEP_SUMMARY"

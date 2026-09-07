@@ -1,0 +1,89 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '30 5 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: tools/.python-version
+
+      - name: Test the tools
+        run: python -m unittest discover -s tools/tests -v
+
+      - name: Check the archives without downloads
+        if: github.event_name == 'pull_request'
+        run: |
+          python tools/build.py pack
+          python tools/build.py verify
+
+      - name: Make sure a .7z can be unpacked
+        if: github.event_name == 'push'
+        run: which 7z || sudo apt-get install -y --no-install-recommends p7zip-full
+
+      - name: Reuse pinned downloads
+        if: github.event_name == 'push'
+        uses: actions/cache@v6
+        with:
+          path: .cache/fetch
+          key: parts-nomovies-${{ hashFiles('pins.toml') }}
+
+      - name: Build the distribution without campaign movies
+        if: github.event_name == 'push'
+        run: python tools/build.py package --variant nomovies
+
+      # GitHub supplies the ZIP wrapper; keep the game at its top level.
+      - name: Keep the runnable distribution
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: OpenTS-Client-NoMovies
+          path: dist/OpenTS-Client/
+          if-no-files-found: error
+
+  client:
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare the client through the developer bootstrap
+        shell: pwsh
+        run: .\dev.cmd -PrepareOnly
+
+      - name: Test the tools with the bootstrapped Python
+        shell: pwsh
+        run: |
+          $pythonVersion = (Get-Content tools/.python-version -Raw).Trim()
+          & ".cache/tools/python-$pythonVersion-amd64/python.exe" -X utf8 -m unittest discover -s tools/tests -v
+          exit $LASTEXITCODE
+
+  # Fresh downloads catch missing hosted files.
+  movies:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: tools/.python-version
+
+      - name: Fetch the hosted movies and verify the archives
+        run: |
+          python tools/build.py fetch movies --fresh
+          python tools/build.py pack
+          python tools/build.py verify

@@ -1,0 +1,71 @@
+# Shared by release deployment and manual promotion.
+
+name: Point live at a version
+description: Replace the live symlink on CnCNet with one to the version named, and read it back.
+
+inputs:
+  tag:
+    description: The uploaded version to point live at
+    required: true
+  key:
+    description: The private key rooted at the folder holding the channels
+    required: true
+  mirror:
+    description: Where the channels are served
+    default: https://downloads.cncnet.org/updates/games/opents
+
+runs:
+  using: composite
+  steps:
+    - name: Make sure the version is on the mirror
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        MIRROR: ${{ inputs.mirror }}
+      run: |
+        if ! curl -fsS "$MIRROR/updates/$TAG/version?$GITHUB_RUN_ID" -o live-expected; then
+          echo "::error::$MIRROR/updates/$TAG/ is not on the mirror. Publish the release first."
+          exit 1
+        fi
+        if ! grep -qx "Version=$TAG" live-expected; then
+          echo "::error::$MIRROR/updates/$TAG/ does not say it is $TAG"
+          exit 1
+        fi
+
+    - name: Load the key
+      shell: bash
+      env:
+        KEY: ${{ inputs.key }}
+      run: |
+        mkdir -p ~/.ssh
+        printf '%s\n' "$KEY" > ~/.ssh/live-key
+        chmod 600 ~/.ssh/live-key
+        cp "$GITHUB_ACTION_PATH/../../cncnet_known_hosts" ~/.ssh/known_hosts
+
+    # rsync replaces the Live symlink without a remote shell.
+    - name: Point live at it
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+      run: |
+        rm -rf live-channel && mkdir live-channel
+        ln -s "updates/$TAG" live-channel/live
+        rsync -l --info=stats1 \
+          -e "ssh -i ~/.ssh/live-key -o ServerAliveInterval=15 -o UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+          live-channel/live cncnet@159.223.1.73:.
+
+    - name: Read it back through the CDN
+      shell: bash
+      env:
+        TAG: ${{ inputs.tag }}
+        MIRROR: ${{ inputs.mirror }}
+      run: |
+        curl -fsS "$MIRROR/live/version?$GITHUB_RUN_ID" -o live-served
+        cmp live-expected live-served
+        echo "live serves $TAG"
+        {
+          echo "## live is $TAG"
+          echo
+          echo "Every client on the Live channel updates to it on its next start."
+          echo "To go back, run promote.yml with the version before."
+        } >> "$GITHUB_STEP_SUMMARY"

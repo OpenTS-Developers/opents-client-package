@@ -1,0 +1,137 @@
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+env:
+  MIRROR: https://downloads.cncnet.org/updates/games/opents
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    outputs:
+      mirror-artifact: ${{ steps.mirror.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: tools/.python-version
+
+      - name: Refuse to publish what cannot be fetched
+        run: |
+          python - <<'PY'
+          import pathlib, sys, tomllib
+          pins = tomllib.loads(pathlib.Path("pins.toml").read_text(encoding="utf-8"))
+          unfetchable = sorted(name for name, pin in pins.items() if not pin.get("url"))
+          if unfetchable:
+              sys.exit(f"Pin a download for {', '.join(unfetchable)} before publishing a release.")
+          PY
+
+      - name: Make sure a .7z can be unpacked
+        run: which 7z || sudo apt-get install -y --no-install-recommends p7zip-full
+
+      - name: Reuse pinned downloads
+        uses: actions/cache@v6
+        with:
+          path: .cache/fetch
+          key: parts-release-${{ hashFiles('pins.toml') }}
+
+      - name: Build both distributions and verify the update mirror
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python tools/build.py package --variant both --tag "$TAG" \
+            --mirror --previous "$MIRROR/live/" \
+            --baseline-output dist/live-baseline.json
+
+      # Deploy these exact bytes, including movies.
+      - name: Keep the verified mirror and its Live baseline
+        id: mirror
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-mirror-${{ github.run_attempt }}
+          path: |
+            dist/mirror/
+            dist/live-baseline.json
+          compression-level: 0
+          include-hidden-files: true
+          if-no-files-found: error
+
+      - name: Attach both distributions to the release
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$TAG" dist/OpenTS-Client*-"$TAG".zip \
+            --clobber --repo "$GITHUB_REPOSITORY"
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: cncnet
+    # Share the lock with manual promotion and rollback.
+    concurrency:
+      group: live-channel
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: tools/.python-version
+
+      - name: Download the verified mirror
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.publish.outputs.mirror-artifact }}
+          path: dist/
+
+      - name: Check Live has not changed while deployment waited
+        if: ${{ !github.event.release.prerelease }}
+        run: |
+          python tools/build.py check-baseline --baseline dist/live-baseline.json \
+            --previous "$MIRROR/live/"
+
+      - name: Load the deploy key
+        env:
+          CNCNET_SSH_KEY: ${{ secrets.CNCNET_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$CNCNET_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          cp .github/cncnet_known_hosts ~/.ssh/known_hosts
+
+      # Preserve previous versions; unchanged component bytes are not resent.
+      - name: Upload this version beside the others
+        run: |
+          rsync -azc --partial --info=stats1 \
+            -e "ssh -i ~/.ssh/deploy -o ServerAliveInterval=15 -o UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            dist/mirror/ cncnet@159.223.1.73:updates/
+
+      - name: Read it back through the CDN
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python tools/build.py readback --built "dist/mirror/$TAG" --url "$MIRROR/updates/$TAG/"
+
+      - name: Point live at it
+        if: ${{ !github.event.release.prerelease }}
+        uses: ./.github/actions/point-live
+        with:
+          tag: ${{ github.event.release.tag_name }}
+          key: ${{ secrets.CNCNET_SSH_KEY }}
+
+      - name: Describe the staged pre-release
+        if: ${{ github.event.release.prerelease }}
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          {
+            echo "## $TAG is staged at \`$MIRROR/updates/$TAG/\`"
+            echo
+            echo "Try the release ZIP, then run promote.yml with \`$TAG\` to move Live."
+          } >> "$GITHUB_STEP_SUMMARY"

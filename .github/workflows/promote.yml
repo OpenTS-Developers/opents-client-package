@@ -1,0 +1,29 @@
+# Promote or roll back an uploaded version without rebuilding.
+
+name: promote
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The uploaded version to point live at'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-channel
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    environment: cncnet
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/point-live
+        with:
+          tag: ${{ inputs.tag }}
+          key: ${{ secrets.CNCNET_SSH_KEY }}
