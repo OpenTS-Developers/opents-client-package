@@ -1,0 +1,25 @@
+World-Altering Editor - Tiberian Sun push build
+
+Upstream binaries and standard TS profile from:
+https://github.com/CnCNet/WorldAlteringEditor/tree/678a838eb1893f113c73a90fade9c111a1cffef3
+
+Build: https://github.com/CnCNet/WorldAlteringEditor/actions/runs/34219474314
+Artifact: WorldAlteringEditor (10053174055)
+SHA-256: 9e8f410cfae14690add507014e01254d806c16788bb56b560e995889ff73296b
+
+Get the corresponding source and any submodules:
+
+git clone https://github.com/CnCNet/WorldAlteringEditor.git
+cd WorldAlteringEditor
+git checkout 678a838eb1893f113c73a90fade9c111a1cffef3
+git submodule update --init --recursive
+
+On Windows, install the .NET 8 SDK and run build.ps1 with PowerShell.
+The build output is written to Build/. Running the editor requires the
+.NET 8 Desktop Runtime. See the source README.md for requirements.
+
+LICENSE.txt contains copyright and third-party notices; COPYING contains
+the GNU General Public License. Both are copied from the source above.
+
+Packaging sets Config/DefaultSettings.ini [General] GameDirectory=.. to
+locate the bundled game. All other upstream settings are retained.
